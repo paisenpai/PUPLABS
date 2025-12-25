@@ -1,0 +1,159 @@
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using PUPBookingSystem.Models;
+using PUPBookingSystem.Data;
+
+namespace PUPBookingSystem.Controllers
+{
+    // [Authorize(Roles = "Admin")] 
+    public class AdminController : Controller
+    {
+        private readonly AppDbContext _context;
+
+        public AdminController(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        // UPGRADE: Added 'filter' parameter to support the dashboard tabs
+        public async Task<IActionResult> Index(string filter = "pending")
+        {
+            var query = _context.BookingRequests
+                .Include(b => b.Room)
+                .Include(b => b.User)
+                .AsQueryable();
+
+            // Apply Filter Logic
+            switch (filter.ToLower())
+            {
+                case "pending":
+                    query = query.Where(b => b.Status == "Pending");
+                    break;
+                case "approved":
+                    query = query.Where(b => b.Status == "Approved");
+                    break;
+                case "rejected":
+                    query = query.Where(b => b.Status == "Rejected");
+                    break;
+                default: 
+                    break;
+            }
+
+            // Sort by Date 
+            var requests = await query
+                .OrderByDescending(b => b.Date)
+                .ThenBy(b => b.StartTime)
+                .ToListAsync();
+
+            // Pass the filter to the View so we know which tab to highlight
+            ViewBag.CurrentFilter = filter;
+
+            return View(requests);
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> Approve(int id, string? comment)
+        {
+            var req = await _context.BookingRequests.FindAsync(id);
+            if (req != null)
+            {
+                req.Status = "Approved";
+                if (!string.IsNullOrWhiteSpace(comment))
+                {
+                    req.AdminNote = comment;
+                }
+                await _context.SaveChangesAsync();
+            }
+            return RedirectToAction("Index");
+        }
+
+        
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> Reject(int id, string? comment)
+        {
+            var req = await _context.BookingRequests.FindAsync(id);
+            if (req != null)
+            {
+                req.Status = "Rejected";
+                if (!string.IsNullOrWhiteSpace(comment))
+                {
+                    req.AdminNote = comment;
+                }
+                await _context.SaveChangesAsync();
+            }
+            return RedirectToAction("Index");
+        }
+
+        // POST: Admin/AddComment
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> AddComment(int id, string comment)
+        {
+            var req = await _context.BookingRequests.FindAsync(id);
+            if (req != null && !string.IsNullOrWhiteSpace(comment))
+            {
+                req.AdminNote = comment;
+                await _context.SaveChangesAsync();
+            }
+            return RedirectToAction("Index");
+        }
+
+        // GET: Admin/Calendar
+        public IActionResult Calendar()
+        {
+            // Fetch only APPROVED bookings
+            var bookings = _context.BookingRequests
+                .Include(b => b.Room)
+                .Include(b => b.User)
+                .Where(b => b.Status == "Approved")
+                .AsEnumerable() // Switch to client-side evaluation
+                .Select(b => new
+                {
+                    id = b.Id,
+                    title = b.Purpose,
+                    room = b.Room?.Code ?? "N/A",
+                    date = b.Date.ToString("yyyy-MM-dd"),
+                    start = DateTime.Today.Add(b.StartTime).ToString("hh:mm tt"),
+                    end = DateTime.Today.Add(b.EndTime).ToString("hh:mm tt"),
+                    userName = b.User?.Name ?? "Unknown"
+                })
+                .ToList();
+
+            // Pass data to view using ViewBag 
+            ViewBag.Bookings = bookings;
+
+            return View();
+        }
+        // GET: Admin/Rooms
+        public async Task<IActionResult> Rooms()
+        {
+            // Fetch all rooms from the database
+            var rooms = await _context.Rooms.OrderBy(r => r.Id).ToListAsync();
+            return View(rooms);
+        }
+
+        // POST: Admin/UpdateRoom
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> UpdateRoom(int id, int capacity, string status, string hours, string notes)
+        {
+            var room = await _context.Rooms.FindAsync(id);
+            if (room == null) return NotFound();
+
+            // Update the room details
+            room.Capacity = capacity;
+            room.Status = status;
+            room.Hours = hours;
+            room.Notes = notes;
+
+            _context.Rooms.Update(room);
+            await _context.SaveChangesAsync();
+
+            // Go back to the Rooms list
+            return RedirectToAction("Rooms");
+        }
+    }
+}
